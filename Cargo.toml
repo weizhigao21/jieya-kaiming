@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/jieya-core", "crates/jieya-cli", "crates/jieya-app"]
+
+[workspace.package]
+version = "0.3.6"
+edition = "2021"
+license = "MIT"
+
+# 体积优先：opt-level=z + LTO + 单 CGU + panic=abort + 去符号
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

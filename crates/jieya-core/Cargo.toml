@@ -1,0 +1,26 @@
+[package]
+name = "jieya-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "解压开镜引擎：递归解压、密码学习、产物落点"
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+encoding_rs = "0.8"
+# 密码系统（P2）
+aes = "0.8"
+cipher = "0.4"
+hmac = "0.12"
+sha1 = "0.10"
+pbkdf2 = "0.12"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+crc32fast = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# 密码库加密导出（P3.5）：容器格式与 Python 版一致
+scrypt = { version = "0.11", default-features = false }
+sha2 = "0.10"
+getrandom = "0.2"

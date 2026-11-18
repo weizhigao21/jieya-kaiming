@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>解压开镜</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M9 12h6"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4"/><path d="m11 11 9 9"/><path d="m16 16 2-2"/></symbol>
+      <symbol id="i-broom" viewBox="0 0 24 24"><path d="m14 4 6 6"/><path d="m12 6 6 6-4 4-6-6Z"/><path d="M8 10 3 21l11-5"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M5.6 18.4l1.4-1.4"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M5.6 18.4l1.4-1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 22 20H2Z"/><path d="M12 9v5M12 17h.01"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 5 5"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+      <symbol id="i-min" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-max" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></symbol>
+      <symbol id="i-restore" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="1"/><path d="M8 8V5h11v11h-3"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app">
+    <header class="topbar" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <span class="mark">解</span>
+        <span class="brand-text">
+          <strong>解压开镜</strong>
+          <small>递归解压 · 自动试密</small>
+        </span>
+      </div>
+
+      <nav class="actions" aria-label="工具栏">
+        <button id="btn-files" class="btn primary"><svg class="i"><use href="#i-archive"/></svg>选择压缩包</button>
+        <button id="btn-folder" class="btn"><svg class="i"><use href="#i-folder"/></svg>文件夹</button>
+        <span class="divider" aria-hidden="true"></span>
+        <button id="btn-theme" class="btn icon" title="切换深浅色" aria-label="切换深浅色"><svg class="i"><use href="#i-moon"/></svg></button>
+        <div class="menu-wrap">
+          <button id="btn-more" class="btn icon" title="更多" aria-label="更多" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-more"/></svg></button>
+          <div id="more-menu" class="menu hidden" role="menu">
+            <button class="menu-item" data-cmd="vault" role="menuitem"><svg class="i"><use href="#i-key"/></svg>密码库</button>
+            <button class="menu-item" data-cmd="clean" role="menuitem"><svg class="i"><use href="#i-broom"/></svg>清理暂存</button>
+            <button class="menu-item" data-cmd="settings" role="menuitem"><svg class="i"><use href="#i-gear"/></svg>设置</button>
+          </div>
+        </div>
+      </nav>
+
+      <div class="win-controls" aria-label="窗口控制">
+        <button class="win-btn" data-win="min" title="最小化" aria-label="最小化"><svg class="i"><use href="#i-min"/></svg></button>
+        <button class="win-btn win-max" data-win="max" title="最大化" aria-label="最大化"><svg class="i"><use href="#i-max"/></svg></button>
+        <button class="win-btn close" data-win="close" title="关闭" aria-label="关闭"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+    </header>
+
+    <div class="body">
+      <main class="main">
+        <section id="drop" class="dropstrip" aria-label="拖放压缩包">
+          <div class="drop-lead">
+            <svg class="i drop-i"><use href="#i-plus"/></svg>
+            <div>
+              <p class="drop-title">把压缩包或文件夹拖进来</p>
+              <p class="drop-sub">支持 zip / rar / 7z / 分卷 / 视频内嵌 ZIP，内层包自动递归展开</p>
+            </div>
+          </div>
+          <span class="drop-hint">窗口任意位置松开即可</span>
+        </section>
+
+        <section id="summary" class="runbar hidden">
+          <span id="summary-text"></span>
+        </section>
+
+        <section class="listpanel">
+          <header class="panel-head">
+            <h2>任务</h2>
+            <span id="task-count" class="count">0 项</span>
+            <span class="flex"></span>
+            <button id="btn-clear-2" class="link" title="清空列表">清空</button>
+          </header>
+          <div class="listhead" aria-hidden="true">
+            <span></span>
+            <span>压缩包</span>
+            <span>状态</span>
+          </div>
+          <div id="tasks" class="tasks"></div>
+          <div id="empty" class="empty">
+            <svg class="empty-i"><use href="#i-archive"/></svg>
+            <p class="empty-t">还没有任务</p>
+            <p class="empty-s">拖入文件，或点击右上角「选择压缩包」。解压结果会落在包旁边。</p>
+          </div>
+        </section>
+      </main>
+
+      <aside class="rail">
+        <section class="panel">
+          <header class="panel-head"><h2>本次运行</h2><span id="run-state" class="muted">空闲</span></header>
+          <div class="stats">
+            <div><b id="stat-done">0</b><span>已解压</span></div>
+            <div><b id="stat-pwd">0</b><span>待密码</span></div>
+            <div><b id="stat-fail">0</b><span>失败</span></div>
+          </div>
+          <div class="runline">
+            <div class="thinbar"><i id="run-bar"></i></div>
+            <span id="run-pct" class="mono">0%</span>
+          </div>
+        </section>
+
+        <section class="panel grow">
+          <header class="panel-head"><h2>任务详情</h2><button id="btn-detail-open" class="icon-btn hidden" title="打开输出目录"><svg class="i"><use href="#i-external"/></svg></button></header>
+          <div id="detail" class="detail">
+            <p class="detail-empty">选中左侧任务查看详情</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <header class="panel-head"><h2>环境</h2></header>
+          <dl class="kv">
+            <dt>7-Zip</dt><dd id="env-7z">检测中…</dd>
+            <dt>版本</dt><dd id="env-version">—</dd>
+            <dt>工作目录</dt><dd id="env-workdir" class="mono ellipsis">—</dd>
+          </dl>
+          <button id="btn-open-workdir" class="btn sm wide"><svg class="i"><use href="#i-folder"/></svg>打开工作目录</button>
+        </section>
+      </aside>
+    </div>
+
+    <footer class="footbar">
+      <span class="statusdot" id="statusdot"></span>
+      <span id="status">就绪</span>
+      <span class="flex"></span>
+      <span id="env" class="mono muted"></span>
+    </footer>
+  </div>
+
+  <!-- 设置 -->
+  <div id="modal-settings" class="modal hidden">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h3>设置</h3>
+        <button class="close" data-close aria-label="关闭"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="sheet-body">
+        <label class="field">
+          <span>7z.exe 路径</span>
+          <input id="set-sevenzip" type="text" placeholder="留空自动探测" />
+        </label>
+        <label class="field">
+          <span>工作目录</span>
+          <input id="set-workdir" type="text" placeholder="跨卷交付与暂存用，留空用默认" />
+        </label>
+        <div class="row2">
+          <label class="field">
+            <span>递归深度上限</span>
+            <input id="set-depth" type="number" min="1" max="20" />
+          </label>
+          <label class="field">
+            <span>密码最多试几个</span>
+            <input id="set-pwd" type="number" min="1" max="100" />
+          </label>
+        </div>
+        <div class="checks">
+          <label class="check"><input id="set-delete" type="checkbox" /> 解完删除内层中间包</label>
+          <label class="check"><input id="set-overwrite" type="checkbox" /> 目标已存在时覆盖（默认避让）</label>
+          <label class="check"><input id="set-skip" type="checkbox" /> 跳过历史里已完成的同一个包</label>
+        </div>
+        <div class="meta-block" id="env-info"></div>
+        <div class="inline-actions">
+          <button id="btn-menu-install" class="btn sm">添加右键菜单</button>
+          <button id="btn-menu-remove" class="btn sm">移除右键菜单</button>
+        </div>
+      </div>
+      <div class="sheet-foot">
+        <button class="btn" data-close>取消</button>
+        <button id="btn-save-settings" class="btn primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 密码库 -->
+  <div id="modal-vault" class="modal hidden">
+    <div class="sheet wide">
+      <div class="sheet-head">
+        <h3>密码库 <span id="vault-count" class="count"></span></h3>
+        <button class="close" data-close aria-label="关闭"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="sheet-body">
+        <div class="toolbar">
+          <label class="searchbox">
+            <svg class="i"><use href="#i-search"/></svg>
+            <input id="vault-search" type="search" placeholder="搜索密码或来源" />
+          </label>
+          <button id="btn-vault-refresh" class="btn sm">刷新</button>
+        </div>
+        <div class="table">
+          <div class="thead"><span>密码</span><span>来源</span><span>命中</span><span></span></div>
+          <div id="vault-rows" class="tbody"></div>
+        </div>
+        <div class="subhead">添加一条</div>
+        <div class="toolbar">
+          <input id="vault-new-pwd" type="text" placeholder="新密码" />
+          <input id="vault-new-src" type="text" placeholder="来源（可空）" />
+          <button id="btn-vault-add" class="btn primary sm">添加</button>
+        </div>
+        <div class="subhead">备份与迁移</div>
+        <div class="toolbar">
+          <input id="vault-backup-pass" type="password" placeholder="备份口令（加密用）" />
+          <button id="btn-vault-export" class="btn sm">导出备份</button>
+          <button id="btn-vault-import" class="btn sm">导入备份</button>
+        </div>
+        <p class="hint">口令同时用于加密与解密，丢失无法恢复。备份格式与 Python 版互通。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 清理 -->
+  <div id="modal-clean" class="modal hidden">
+    <div class="sheet wide">
+      <div class="sheet-head">
+        <h3>暂存区清理</h3>
+        <button class="close" data-close aria-label="关闭"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="sheet-body">
+        <p class="hint" id="clean-head"></p>
+        <div id="clean-list" class="clean-list"></div>
+      </div>
+      <div class="sheet-foot">
+        <button id="btn-clean-scan" class="btn">重新盘点</button>
+        <button id="btn-clean-prune" class="btn danger">清理勾选项</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <section id="quick" class="quick hidden" aria-live="polite">
+    <header class="quick-head" data-tauri-drag-region>
+      <div class="quick-brand" data-tauri-drag-region>
+        <span class="quick-logo">解</span>
+        <div>
+          <strong>解压开镜</strong>
+          <small>右键解压</small>
+        </div>
+      </div>
+      <div class="win-controls" aria-label="窗口控制">
+        <button class="win-btn" data-win="min" title="最小化" aria-label="最小化"><svg class="i"><use href="#i-min"/></svg></button>
+        <button class="win-btn win-max" data-win="max" title="固定大小" aria-label="固定大小" disabled><svg class="i"><use href="#i-max"/></svg></button>
+        <button class="win-btn close" data-win="close" title="关闭" aria-label="关闭"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+    </header>
+
+    <div class="quick-body">
+      <div class="quick-file-row">
+        <div id="quick-name" class="quick-name">准备解压…</div>
+        <span id="quick-count" class="quick-count"></span>
+      </div>
+      <div id="quick-meta" class="quick-meta">等待开始</div>
+
+      <div class="quick-track"><div id="quick-fill" class="quick-fill"></div></div>
+      <div class="quick-line">
+        <span id="quick-status">正在启动…</span>
+        <span id="quick-percent">0%</span>
+      </div>
+      <div id="quick-note" class="quick-note"></div>
+
+      <form id="quick-pwd" class="quick-pwd hidden">
+        <span class="quick-pwd-label">需要密码</span>
+        <input id="quick-pwd-input" type="password" placeholder="输入密码后回车" autocomplete="off">
+        <button type="submit" class="btn primary">解锁</button>
+      </form>
+    </div>
+
+    <footer id="quick-foot" class="quick-foot hidden">
+      <button id="quick-open" class="btn">打开输出目录</button>
+    </footer>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
