@@ -20,6 +20,7 @@
 | UI | 无边框自绘标题栏（最小化/最大化/关闭内置）、Swiss 工具风、浅/深主题、任务列表 + 详情栏 | ✅ v0.3.4 |
 | 图标 | 黄色闪电贯穿翻开的书，书页扇形翻动 | ✅ v0.3.5 |
 | 启动 | 窗口先隐藏，主界面/小窗排好后再显示，右键启动不再闪主 UI | ✅ v0.3.6 |
+| 标题栏 | 品牌图标换成新应用图标；无边框窗口全标题栏可拖动 | ✅ v0.3.7 |
 
 ### 界面预览
 
@@ -92,8 +93,8 @@ GUI 前端是纯静态 HTML/CSS/JS（`crates/jieya-app/ui`），不需要 npm �
 打包便携版：
 
 ```powershell
-pwsh tools\build-release.ps1 -Version 0.3.6
-# 产物：dist\解压开镜-0.3.6-win64.zip
+pwsh tools\build-release.ps1 -Version 0.3.7
+# 产物：dist\解压开镜-0.3.7-win64.zip
 ```
 
 依赖外部 `7-Zip`（`7z.exe`），定位顺序：`--sevenzip` > `SEVENZIP_PATH` > 常见安装路径 > `PATH`。

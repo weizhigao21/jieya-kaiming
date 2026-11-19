@@ -779,6 +779,19 @@ function initWindowControls() {
   syncWinMax();
 }
 
+function initWindowDrag() {
+  if (!window.__TAURI__) return;
+  const win = window.__TAURI__.webviewWindow.getCurrentWebviewWindow();
+  const interactive = (t) => t.closest("button, a, input, select, textarea, .menu-wrap, .win-controls");
+  document.querySelectorAll(".topbar, .quick-head").forEach((bar) => {
+    bar.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.isPrimary === false) return;
+      if (interactive(e.target)) return;
+      win.startDragging().catch(() => {});
+    });
+  });
+}
+
 async function syncWinMax() {
   const max = await invoke("win_is_max").catch(() => false);
   document.querySelectorAll(".win-max use").forEach((u) => {
@@ -789,6 +802,7 @@ async function syncWinMax() {
 function initUi() {
   initTheme();
   initWindowControls();
+  initWindowDrag();
 
   $("#btn-files").onclick = () => pick(false);
   $("#btn-folder").onclick = () => pick(true);
