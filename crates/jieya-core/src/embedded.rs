@@ -21,6 +21,9 @@ pub struct EmbeddedZip {
     pub start: u64,
     pub end: u64,
     pub members: Vec<String>,
+    cd_abs: u64,
+    cd_size: u64,
+    count: u64,
 }
 
 /// 这些格式本身就是正常压缩包，内部即便含 ZIP 也不能当视频外壳剥离。
@@ -164,7 +167,14 @@ pub fn find_embedded_zip(path: &Path) -> Option<EmbeddedZip> {
             continue;
         };
         if start > 0 || end < size {
-            return Some(EmbeddedZip { start, end, members });
+            return Some(EmbeddedZip {
+                start,
+                end,
+                members,
+                cd_abs,
+                cd_size,
+                count,
+            });
         }
         return None; // 普通 ZIP 不需要复制
     }
@@ -180,25 +190,80 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
-fn read_member_names(f: &mut File, cd_abs: u64, count: usize, cd_size: u64) -> Option<Vec<String>> {
+struct EntryRecord {
+    name: String,
+    method: u16,
+    csize: u64,
+    usize: u64,
+    local_offset: u64,
+}
+
+fn read_entries(
+    f: &mut File,
+    cd_abs: u64,
+    count: usize,
+    cd_size: u64,
+) -> Option<Vec<EntryRecord>> {
     f.seek(SeekFrom::Start(cd_abs)).ok()?;
     let mut buf = vec![0u8; cd_size as usize];
     f.read_exact(&mut buf).ok()?;
     let mut pos = 0usize;
-    let mut names = Vec::with_capacity(count);
+    let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         if u32_at(&buf, pos)? != 0x0201_4B50 {
             return None;
         }
         let flags = u16_at(&buf, pos + 8)?;
+        let method = u16_at(&buf, pos + 10)?;
+        let csize32 = u32_at(&buf, pos + 20)?;
+        let usize32 = u32_at(&buf, pos + 24)?;
         let nlen = u16_at(&buf, pos + 28)? as usize;
         let xlen = u16_at(&buf, pos + 30)? as usize;
         let clen = u16_at(&buf, pos + 32)? as usize;
+        let lho32 = u32_at(&buf, pos + 42)?;
         let raw = buf.get(pos + 46..pos + 46 + nlen)?;
-        names.push(decode_name(raw, flags));
+        let extra = buf.get(pos + 46 + nlen..pos + 46 + nlen + xlen)?;
+
+        let mut usize = usize32 as u64;
+        let mut csize = csize32 as u64;
+        let mut local_offset = lho32 as u64;
+        let mut at = 0usize;
+        while at + 4 <= extra.len() {
+            let id = u16_at(extra, at)?;
+            let len = u16_at(extra, at + 2)? as usize;
+            let body = extra.get(at + 4..at + 4 + len)?;
+            if id == 1 {
+                let mut p = 0usize;
+                if usize32 == u32::MAX {
+                    usize = u64_at(body, p)?;
+                    p += 8;
+                }
+                if csize32 == u32::MAX {
+                    csize = u64_at(body, p)?;
+                    p += 8;
+                }
+                if lho32 == u32::MAX {
+                    local_offset = u64_at(body, p)?;
+                }
+            }
+            at += 4 + len;
+        }
+
+        entries.push(EntryRecord {
+            name: decode_name(raw, flags),
+            method,
+            csize,
+            usize,
+            local_offset,
+        });
         pos += 46 + nlen + xlen + clen;
     }
-    Some(names)
+    Some(entries)
+}
+
+fn read_member_names(f: &mut File, cd_abs: u64, count: usize, cd_size: u64) -> Option<Vec<String>> {
+    read_entries(f, cd_abs, count, cd_size)
+        .map(|v| v.into_iter().map(|e| e.name).collect())
 }
 
 fn decode_name(raw: &[u8], flags: u16) -> String {
@@ -218,15 +283,157 @@ fn decode_name(raw: &[u8], flags: u16) -> String {
     }
 }
 
-/// 恢复出来的临时 ZIP：Drop 时删掉整个临时目录。
+/// 单条归档类条目才值得直接解出来，避免为了一个 txt 再走一遍 7z。
+fn is_inner_archive_name(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .map(|e| {
+            matches!(
+                e.to_string_lossy().to_ascii_lowercase().as_str(),
+                "7z" | "zip" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "cab" | "iso"
+                    | "wim" | "001"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn safe_entry_name(name: &str) -> Option<String> {
+    let base = Path::new(name).file_name()?.to_string_lossy().to_string();
+    if base.is_empty() || base == "." || base == ".." {
+        return None;
+    }
+    Some(
+        base.chars()
+            .map(|c| {
+                if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                    '_'
+                } else {
+                    c
+                }
+            })
+            .collect(),
+    )
+}
+
+/// 直接把内嵌 ZIP 里唯一的内层压缩包解出来，跳过前面的视频壳。
+/// 7z 不能从文件中间开始读，所以至少要把内层包落成一个临时文件；
+/// 但不再复制外层那整段 ZIP（本例可省掉约 18 GB 的中间副本）。
+fn try_extract_single(
+    path: &Path,
+    bounds: &EmbeddedZip,
+    dir: &Path,
+    should_cancel: Option<&dyn Fn() -> bool>,
+    on_progress: Option<&dyn Fn(u8)>,
+) -> Option<PathBuf> {
+    let mut f = File::open(path).ok()?;
+    let entries = read_entries(&mut f, bounds.cd_abs, bounds.count as usize, bounds.cd_size)?;
+    if entries.len() != 1 {
+        return None;
+    }
+    let entry = &entries[0];
+    if entry.name.ends_with('/') || !is_inner_archive_name(&entry.name) {
+        return None;
+    }
+    if entry.method != 0 && entry.method != 8 {
+        return None;
+    }
+
+    let lho_abs = bounds.start.checked_add(entry.local_offset)?;
+    f.seek(SeekFrom::Start(lho_abs)).ok()?;
+    let mut local = [0u8; 30];
+    f.read_exact(&mut local).ok()?;
+    if local[0..4] != LOCAL {
+        return None;
+    }
+    let local_flags = u16_at(&local, 6)?;
+    let local_method = u16_at(&local, 8)?;
+    if local_flags & 1 != 0 || local_method != entry.method {
+        return None; // 加密或本地头与目录不一致，交给 7z 走密码流程
+    }
+    let nlen = u16_at(&local, 26)? as u64;
+    let xlen = u16_at(&local, 28)? as u64;
+    let data_start = lho_abs.checked_add(30 + nlen + xlen)?;
+    if data_start.checked_add(entry.csize)? > bounds.end {
+        return None;
+    }
+
+    let name = safe_entry_name(&entry.name)?;
+    let output_path = dir.join(name);
+    let total = if entry.method == 8 { entry.usize } else { entry.csize };
+    if total == 0 {
+        return None;
+    }
+
+    let result = (|| -> std::io::Result<()> {
+        let mut source = File::open(path)?;
+        source.seek(SeekFrom::Start(data_start))?;
+        let mut output = std::io::BufWriter::with_capacity(
+            8 * 1024 * 1024,
+            File::create(&output_path)?,
+        );
+        let mut copied = 0u64;
+        let mut buf = vec![0u8; 8 * 1024 * 1024];
+        if let Some(cb) = on_progress {
+            cb(0);
+        }
+        let mut reader: Box<dyn Read> = if entry.method == 8 {
+            Box::new(flate2::read::DeflateDecoder::new(
+                source.take(entry.csize),
+            ))
+        } else {
+            Box::new(source.take(entry.csize))
+        };
+        loop {
+            if let Some(cancel) = should_cancel {
+                if cancel() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "cancelled",
+                    ));
+                }
+            }
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            output.write_all(&buf[..n])?;
+            copied += n as u64;
+            if let Some(cb) = on_progress {
+                cb((copied * 100 / total).min(100) as u8);
+            }
+        }
+        output.flush()?;
+        if copied != total {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "内嵌条目的长度与目录不一致",
+            ));
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&output_path);
+        return None;
+    }
+    Some(output_path)
+}
+
+/// 恢复出来的临时包：Drop 时删掉整个临时目录。
 pub struct Recovered {
     dir: PathBuf,
     path: PathBuf,
+    direct: bool,
 }
 
 impl Recovered {
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// true 表示已跳过视频壳、直接解出内层包；false 表示整段 ZIP 临时副本。
+    pub fn is_direct(&self) -> bool {
+        self.direct
     }
 }
 
@@ -236,7 +443,8 @@ impl Drop for Recovered {
     }
 }
 
-/// 有内嵌 ZIP 就复制到 workdir 下的临时目录并返回；普通文件返回 Ok(None)。
+/// 有内嵌 ZIP 就恢复到 workdir 下的临时目录并返回；普通文件返回 Ok(None)。
+/// 单条内层包直接解出，只有多条目/加密包才复制整段 ZIP。
 pub fn prepare(
     path: &Path,
     workdir: &Path,
@@ -254,6 +462,22 @@ pub fn prepare(
         .unwrap_or(0);
     let dir = workdir.join(format!("embedded_zip_{}_{}", std::process::id(), nonce));
     std::fs::create_dir_all(&dir)?;
+
+    // 单条内层包：直接解出内层包，跳过前面的视频壳；多条目或加密包再走整段复制。
+    if let Some(direct) = try_extract_single(path, &bounds, &dir, should_cancel, on_progress) {
+        return Ok(Some(Recovered {
+            dir,
+            path: direct,
+            direct: true,
+        }));
+    }
+    if let Some(cancel) = should_cancel {
+        if cancel() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(crate::Error::Cancelled);
+        }
+    }
+
     let recovered = dir.join("payload.zip");
 
     let total = bounds.end - bounds.start;
@@ -283,7 +507,11 @@ pub fn prepare(
         }
     }
     output.flush()?;
-    Ok(Some(Recovered { dir, path: recovered }))
+    Ok(Some(Recovered {
+        dir,
+        path: recovered,
+        direct: false,
+    }))
 }
 
 #[cfg(test)]
@@ -455,6 +683,26 @@ mod tests {
             .unwrap()
             .expect("ZIP64 内嵌 ZIP 应当能切出来");
         assert_eq!(std::fs::read(rec.path()).unwrap(), data[4096..].to_vec());
+        drop(rec);
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn single_inner_archive_is_extracted_directly() {
+        let dir = temp_dir("inner_direct");
+        let p = dir.join("video.mp4");
+        let payload = b"fake-7z-bytes";
+        let data = zip64_with_prefix(b"inner.7z", payload, 8192);
+        std::fs::write(&p, &data).unwrap();
+
+        let work = temp_dir("inner_direct_work");
+        let rec = prepare(&p, &work, None, None)
+            .unwrap()
+            .expect("单条内层包应当直接解出来");
+        assert_eq!(rec.path().file_name().unwrap(), "inner.7z");
+        assert_eq!(std::fs::read(rec.path()).unwrap(), payload.to_vec());
+        assert!(!rec.path().parent().unwrap().join("payload.zip").exists());
         drop(rec);
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&dir);

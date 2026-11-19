@@ -235,7 +235,7 @@ impl Pipeline {
             let progress = |pct: u8| {
                 on_event(Event::Phase {
                     task_id: task.id,
-                    message: format!("正在恢复视频内嵌 ZIP… {pct}%"),
+                    message: format!("正在跳过视频头，读取内嵌包… {pct}%"),
                 })
             };
             let mut recovered: Option<crate::embedded::Recovered> = None;
@@ -257,10 +257,15 @@ impl Pipeline {
                 Some(&progress),
             ) {
                 Ok(Some(r)) => {
+                    let direct = r.is_direct();
                     let path = r.path().to_path_buf();
                     on_event(Event::Phase {
                         task_id: task.id,
-                        message: "已识别视频内嵌 ZIP，正在按真实边界解压".into(),
+                        message: if direct {
+                            "已跳过视频头，直接解出内嵌包".into()
+                        } else {
+                            "已识别视频内嵌 ZIP，正在按真实边界解压".into()
+                        },
                     });
                     recovered = Some(r);
                     path
