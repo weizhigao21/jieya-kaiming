@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 const TAIL_SIZE: u64 = 1024 * 1024;
 const EOCD: [u8; 4] = [b'P', b'K', 0x05, 0x06];
+const ZIP64_EOCD: [u8; 4] = [b'P', b'K', 0x06, 0x06];
+const ZIP64_LOCATOR: [u8; 4] = [b'P', b'K', 0x06, 0x07];
 const LOCAL: [u8; 4] = [b'P', b'K', 0x03, 0x04];
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,47 @@ fn u32_at(b: &[u8], o: usize) -> Option<u32> {
         .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
+fn u64_at(b: &[u8], o: usize) -> Option<u64> {
+    b.get(o..o + 8)
+        .map(|s| u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
+}
+
+struct Zip64Tail {
+    record_pos: usize,
+    count: u64,
+    cd_size: u64,
+    cd_offset: u64,
+}
+
+/// ZIP64 的 EOCD 紧跟在 locator 前面；被视频前缀拼接过的包，locator 里记的
+/// 偏移会相对 ZIP 起点，不能直接拿去 seek，所以在尾部缓冲区里向前找记录。
+fn find_zip64_tail(tail: &[u8], eocd_pos: usize) -> Option<Zip64Tail> {
+    if eocd_pos < 20 || tail.get(eocd_pos - 20..eocd_pos - 16)? != ZIP64_LOCATOR {
+        return None;
+    }
+    let locator_pos = eocd_pos - 20;
+    let lower = locator_pos.saturating_sub(4096);
+    for i in (lower..locator_pos).rev() {
+        if tail.get(i..i + 4)? != ZIP64_EOCD {
+            continue;
+        }
+        let record_size = u64_at(tail, i + 4)?;
+        if record_size > 4096 || i + 12 + record_size as usize != locator_pos {
+            continue;
+        }
+        let count = u64_at(tail, i + 32)?;
+        let cd_size = u64_at(tail, i + 40)?;
+        let cd_offset = u64_at(tail, i + 48)?;
+        return Some(Zip64Tail {
+            record_pos: i,
+            count,
+            cd_size,
+            cd_offset,
+        });
+    }
+    None
+}
+
 /// 从尾部 EOCD 反推 ZIP 的真实起止；普通文件返回 None。
 pub fn find_embedded_zip(path: &Path) -> Option<EmbeddedZip> {
     let size = std::fs::metadata(path).ok()?.len();
@@ -70,18 +113,37 @@ pub fn find_embedded_zip(path: &Path) -> Option<EmbeddedZip> {
         let disk = u16_at(&tail, pos + 4)?;
         let cd_disk = u16_at(&tail, pos + 6)?;
         let count_disk = u16_at(&tail, pos + 8)?;
-        let count = u16_at(&tail, pos + 10)?;
-        let cd_size = u32_at(&tail, pos + 12)? as u64;
-        let cd_offset = u32_at(&tail, pos + 16)? as u64;
+        let count16 = u16_at(&tail, pos + 10)?;
+        let cd_size32 = u32_at(&tail, pos + 12)? as u64;
+        let cd_offset32 = u32_at(&tail, pos + 16)? as u64;
         let comment = u16_at(&tail, pos + 20)? as u64;
         let end = tail_start + pos as u64 + 22 + comment;
-        if disk != 0 || cd_disk != 0 || count_disk != count || end > size || cd_size > tail_start + pos as u64 {
+        if disk != 0 || cd_disk != 0 || count_disk != count16 || end > size {
             continue;
         }
         let eocd_abs = tail_start + pos as u64;
-        let Some(cd_abs) = eocd_abs.checked_sub(cd_size) else {
-            continue;
+
+        let needs_zip64 = cd_offset32 == u32::MAX as u64
+            || cd_size32 == u32::MAX as u64
+            || count16 == u16::MAX;
+        let (count, cd_size, cd_offset, cd_abs) = if needs_zip64 {
+            let Some(z) = find_zip64_tail(&tail, pos) else {
+                continue;
+            };
+            let z_abs = tail_start + z.record_pos as u64;
+            let Some(cd_abs) = z_abs.checked_sub(z.cd_size) else {
+                continue;
+            };
+            (z.count, z.cd_size, z.cd_offset, cd_abs)
+        } else {
+            let Some(cd_abs) = eocd_abs.checked_sub(cd_size32) else {
+                continue;
+            };
+            (count16 as u64, cd_size32, cd_offset32, cd_abs)
         };
+        if cd_size > tail_start + pos as u64 || count > 1_000_000 || cd_size > 64 * 1024 * 1024 {
+            continue;
+        }
         let Some(start) = cd_abs.checked_sub(cd_offset) else {
             continue;
         };
@@ -333,6 +395,68 @@ mod tests {
         let p = dir.join("a.7z");
         std::fs::write(&p, [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0, 0]).unwrap();
         assert!(find_embedded_zip(&p).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 视频前缀 + ZIP64 包：EOCD 的 32 位字段全是 0xFF，必须靠 ZIP64 记录反推起点。
+    fn zip64_with_prefix(name: &[u8], payload: &[u8], prefix: usize) -> Vec<u8> {
+        let standard = zip_bytes(name, payload);
+        let body = &standard[..standard.len() - 22]; // local + central，去掉普通 EOCD
+        let local_len = 30 + name.len() + payload.len();
+        let cd_len = body.len() - local_len;
+
+        let mut out = vec![0u8; prefix];
+        out.extend_from_slice(body);
+        let zip64_record = out.len();
+
+        out.extend_from_slice(&[0x50, 0x4B, 0x06, 0x06]);
+        out.extend_from_slice(&44u64.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes());
+        out.extend_from_slice(&(cd_len as u64).to_le_bytes());
+        out.extend_from_slice(&(local_len as u64).to_le_bytes());
+
+        // ZIP64 EOCD locator，偏移相对 ZIP 起点
+        out.extend_from_slice(&[0x50, 0x4B, 0x06, 0x07]);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&((zip64_record - prefix) as u64).to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+
+        // 普通 EOCD，32 位字段用 0xFFFF/0xFFFFFFFF 占位
+        out.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06]);
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        out.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+        out.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn zip64_embedded_zip_is_found() {
+        let dir = temp_dir("zip64");
+        let p = dir.join("video.mp4");
+        let data = zip64_with_prefix(b"secret.txt", b"payload", 4096);
+        std::fs::write(&p, &data).unwrap();
+
+        let found = find_embedded_zip(&p).expect("应当识别出 ZIP64 内嵌 ZIP");
+        assert_eq!(found.start, 4096);
+        assert_eq!(found.end, data.len() as u64);
+        assert_eq!(found.members, vec!["secret.txt".to_string()]);
+
+        let work = temp_dir("zip64_work");
+        let rec = prepare(&p, &work, None, None)
+            .unwrap()
+            .expect("ZIP64 内嵌 ZIP 应当能切出来");
+        assert_eq!(std::fs::read(rec.path()).unwrap(), data[4096..].to_vec());
+        drop(rec);
+        let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

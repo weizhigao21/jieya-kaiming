@@ -163,9 +163,12 @@ fn sniff(path: &Path) -> (u64, String) {
     (size, String::new())
 }
 
-/// 视频载体中的内嵌 zip（第二阶段实现，见 embedded_zip.py）
-pub fn find_embedded_zip(_path: &Path) -> Option<EmbeddedZipInfo> {
-    None
+/// 视频载体中的内嵌 zip（真正的尾部 EOCD 扫描在 embedded.rs）
+pub fn find_embedded_zip(path: &Path) -> Option<EmbeddedZipInfo> {
+    crate::embedded::find_embedded_zip(path).map(|z| EmbeddedZipInfo {
+        start: z.start,
+        end: z.end,
+    })
 }
 
 #[derive(Debug, Clone)]

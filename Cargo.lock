@@ -1981,7 +1981,7 @@ dependencies = [
 
 [[package]]
 name = "jieya-app"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "jieya-core",
  "rfd",
@@ -1993,14 +1993,14 @@ dependencies = [
 
 [[package]]
 name = "jieya-cli"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "jieya-core",
 ]
 
 [[package]]
 name = "jieya-core"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "aes",
  "chrono",

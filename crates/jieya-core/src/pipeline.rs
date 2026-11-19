@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::config::Config;
-use crate::detect::{self, COMPOUND_ZIP_EXTS, VIDEO_EXTS};
+use crate::detect::{self, COMPOUND_ZIP_EXTS, NOT_ARCHIVE_EXTS, VIDEO_EXTS};
 use crate::error::{Error, Result};
 use crate::models::{Task, TaskStatus};
 use crate::output::{self, OutputMode, OutputPlan};
@@ -268,6 +268,34 @@ impl Pipeline {
                 Ok(None) => task.archive.clone(),
                 Err(_) => task.archive.clone(),
             };
+
+            // 视频没有内嵌 ZIP、或选了图片/文档这类不可能是包的文件时，
+            // 不再把它丢给 7z 整文件扫描：19 GB 的视频会扫很久，最后只回一堆 7z 噪声。
+            let ext = actual
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy().to_ascii_lowercase()))
+                .unwrap_or_default();
+            if actual == task.archive
+                && !detect::looks_like_archive(&actual)
+                && (VIDEO_EXTS.contains(&ext.as_str()) || NOT_ARCHIVE_EXTS.contains(&ext.as_str()))
+            {
+                let reason = if VIDEO_EXTS.contains(&ext.as_str()) {
+                    "这不是压缩包：视频中没有检测到内嵌 ZIP".to_string()
+                } else {
+                    "这不是压缩包".to_string()
+                };
+                task.status = TaskStatus::Failed;
+                task.error = Some(reason.clone());
+                self.persist_update(&task);
+                on_event(Event::TaskFailed {
+                    task_id: task.id,
+                    archive: task.archive.clone(),
+                    reason,
+                });
+                report.failed += 1;
+                report.tasks.push(task);
+                continue;
+            }
 
             // 1. 探测：拿到格式/大小/加密标记，供界面与 zip bomb 判定
             match probe::probe(&self.sz, &actual) {
