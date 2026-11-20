@@ -56,7 +56,9 @@ pub fn parse_slt(text: &str, archive: &Path) -> ArchiveInfo {
                 "Size" => e.size = value.parse().unwrap_or(0),
                 "Folder" => e.is_dir = value == "+",
                 "Encrypted" => {
-                    if matches!(value.to_ascii_lowercase().as_str(), "+" | "true" | "yes") {
+                    let enc = matches!(value.to_ascii_lowercase().as_str(), "+" | "true" | "yes");
+                    e.encrypted = enc;
+                    if enc {
                         info.flag_encrypted = true;
                     }
                 }

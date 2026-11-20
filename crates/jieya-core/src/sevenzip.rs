@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[derive(Clone)]
 pub struct SevenZip {
     exe: PathBuf,
     pub list_timeout: Duration,
@@ -122,6 +123,22 @@ impl SevenZip {
             self.list_timeout,
         )?;
         Ok(code)
+    }
+
+    /// 只测一个条目：7z 会解到该条目所在的 solid 块为止。
+    /// 只用于快速排除错误密码，命中后仍要整包解压确认。
+    pub fn test_entry(&self, archive: &Path, entry: &str, password: &str) -> Result<(i32, String)> {
+        let (code, out, err) = self.run(
+            &[
+                "t".into(),
+                format!("-p{password}"),
+                archive.display().to_string(),
+                entry.to_string(),
+                "-bd".into(),
+            ],
+            self.list_timeout,
+        )?;
+        Ok((code, format!("{out}\n{err}")))
     }
 
     /// 流式解压：`on_progress(percent)` 增量回调，`cancel` 为真时杀掉 7z。

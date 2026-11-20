@@ -470,6 +470,55 @@ impl Pipeline {
         Ok(report)
     }
 
+    /// 并行密码预筛：每个候选起一个 `7z t`，只测第一个条目。
+    /// 返回 (命中密码, 已试数量, 进程启动/异常数)。
+    fn probe_passwords_parallel(
+        &self,
+        archive: &Path,
+        entry: &str,
+        candidates: &[String],
+        threads: usize,
+    ) -> (Option<String>, usize, usize) {
+        let mut found = None;
+        let mut tried = 0usize;
+        let mut errors = 0usize;
+
+        'outer: for chunk in candidates.chunks(threads.max(1)) {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|pwd| {
+                        let sz = self.sz.clone();
+                        let archive = archive.to_path_buf();
+                        let entry = entry.to_string();
+                        let pwd = pwd.clone();
+                        scope.spawn(move || {
+                            let result = sz.test_entry(&archive, &entry, &pwd);
+                            (pwd, result)
+                        })
+                    })
+                    .collect();
+
+                for h in handles {
+                    match h.join() {
+                        Ok((pwd, Ok((code, text)))) => {
+                            tried += 1;
+                            // 条目没匹配上时 7z 也返回 0，不能当成密码正确
+                            if code == 0 && !text.contains("No files to process") {
+                                found = Some(pwd);
+                            }
+                        }
+                        Ok((_, Err(_))) | Err(_) => errors += 1,
+                    }
+                }
+            });
+            if found.is_some() {
+                break 'outer;
+            }
+        }
+
+        (found, tried, errors)
+    }
     /// 一次完整尝试：空密码 → 文件名/来源/密码库/字典候选。
     ///
     /// ZIP 先走两条快速路径：
@@ -515,6 +564,101 @@ impl Pipeline {
         let mut last_msg = String::new();
         let mut skipped_by_filter = 0usize;
         let mut index = 0usize;
+
+        // 非 ZIP 的加密包：先用 `7z t` 只测第一个条目，并行排除错误密码。
+        // 7zAES 的 KDF 很贵，串行整包解一次 0.2~0.3s；`t` 单条目约 0.07~0.1s，
+        // 多进程并行后候选密码的吞吐能翻几倍。
+        let test_entry = task
+            .info
+            .as_ref()
+            .filter(|i| i.flag_encrypted && !i.needs_password_for_listing)
+            .and_then(|i| {
+                i.entries
+                    .iter()
+                    .find(|e| e.encrypted && !e.is_dir && e.size > 0)
+                    .map(|e| e.path.clone())
+            });
+
+        let extract_pwd = |pwd: &str| -> Attempt {
+            let task_id = task.id;
+            let progress = |pct: u8| {
+                on_event(Event::Progress {
+                    task_id,
+                    percent: pct,
+                })
+            };
+            match self.sz.extract(archive, out_dir, pwd, Some(&progress), None) {
+                Ok((code, text)) => {
+                    let (ok, wrong_pw, msg) = probe::classify_extract(code, &text);
+                    if ok {
+                        self.record_hit(pwd, &source);
+                        return Attempt::Success {
+                            password: if pwd.is_empty() {
+                                None
+                            } else {
+                                Some(pwd.to_string())
+                            },
+                        };
+                    }
+                    cleanup(out_dir);
+                    if wrong_pw {
+                        Attempt::NeedsPassword {
+                            last_msg: format!("预筛命中的密码整包校验失败：{msg}"),
+                        }
+                    } else {
+                        Attempt::Failed { msg }
+                    }
+                }
+                Err(e) => {
+                    cleanup(out_dir);
+                    Attempt::Failed {
+                        msg: format!("解压失败：{e}"),
+                    }
+                }
+            }
+        };
+
+        if filter.is_none() && aes_entries.is_none() {
+            if let Some(entry) = test_entry.as_deref() {
+                // 空密码仍要真实试一次
+                if let Ok((0, text)) = self.sz.test_entry(archive, entry, "") {
+                    if !text.contains("No files to process") {
+                        return extract_pwd("");
+                    }
+                }
+
+                if attempts.len() > 1 {
+                    let candidates = &attempts[1..];
+                    let threads = std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(4)
+                        .clamp(2, 16);
+                    on_event(Event::Phase {
+                        task_id: task.id,
+                        message: format!(
+                            "并行试密码：{} 个候选，{} 线程",
+                            candidates.len(),
+                            threads
+                        ),
+                    });
+                    let (found, tried, errors) =
+                        self.probe_passwords_parallel(archive, entry, candidates, threads);
+                    if let Some(pwd) = found {
+                        on_event(Event::Phase {
+                            task_id: task.id,
+                            message: "候选密码命中，开始整包解压".into(),
+                        });
+                        return extract_pwd(&pwd);
+                    }
+                    if errors == 0 {
+                        cleanup(out_dir);
+                        return Attempt::NeedsPassword {
+                            last_msg: format!("并行试了 {tried} 个候选密码，均不正确"),
+                        };
+                    }
+                }
+            }
+        }
 
         while index < attempts.len() {
             let pwd = attempts[index].clone();

@@ -6,6 +6,8 @@ pub struct ArchiveEntry {
     pub path: String,
     pub size: u64,
     pub is_dir: bool,
+    /// 该条目是否加密（7z/RAR 可逐条加密，不能只看整包标志）
+    pub encrypted: bool,
 }
 
 /// 一次探测的结论：格式、体量、加密与分卷信息。
