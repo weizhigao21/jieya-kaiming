@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use crate::config::Config;
 use crate::detect::{self, COMPOUND_ZIP_EXTS, NOT_ARCHIVE_EXTS, VIDEO_EXTS};
 use crate::error::{Error, Result};
+use crate::fastprobe;
 use crate::models::{Task, TaskStatus};
 use crate::output::{self, OutputMode, OutputPlan};
 use crate::password::{self, build_candidates};
@@ -565,20 +566,6 @@ impl Pipeline {
         let mut skipped_by_filter = 0usize;
         let mut index = 0usize;
 
-        // 非 ZIP 的加密包：先用 `7z t` 只测第一个条目，并行排除错误密码。
-        // 7zAES 的 KDF 很贵，串行整包解一次 0.2~0.3s；`t` 单条目约 0.07~0.1s，
-        // 多进程并行后候选密码的吞吐能翻几倍。
-        let test_entry = task
-            .info
-            .as_ref()
-            .filter(|i| i.flag_encrypted && !i.needs_password_for_listing)
-            .and_then(|i| {
-                i.entries
-                    .iter()
-                    .find(|e| e.encrypted && !e.is_dir && e.size > 0)
-                    .map(|e| e.path.clone())
-            });
-
         let extract_pwd = |pwd: &str| -> Attempt {
             let task_id = task.id;
             let progress = |pct: u8| {
@@ -617,6 +604,94 @@ impl Pipeline {
                 }
             }
         };
+
+        // 7z 专用快筛：纯 Rust 直接读第一个加密条目，不启动 7z 进程。
+        // 只验证密码；命中后仍交给 7z 正式解压。
+        let is_7z = task
+            .info
+            .as_ref()
+            .map(|i| {
+                i.format_name.eq_ignore_ascii_case("7z")
+                    && (i.flag_encrypted || i.needs_password_for_listing)
+            })
+            .unwrap_or(false);
+        if is_7z {
+            let mut fast_ok = true;
+            match fastprobe::verify(archive, "") {
+                fastprobe::Probe::Match => {
+                    on_event(Event::Phase {
+                        task_id: task.id,
+                        message: "Rust 快筛：空密码通过".into(),
+                    });
+                    return extract_pwd("");
+                }
+                fastprobe::Probe::Wrong => {}
+                fastprobe::Probe::Unsupported(msg) => {
+                    fast_ok = false;
+                    on_event(Event::Phase {
+                        task_id: task.id,
+                        message: format!("Rust 快筛不支持（{msg}），回退 7z"),
+                    });
+                }
+            }
+
+            if fast_ok && attempts.len() > 1 {
+                let candidates = &attempts[1..];
+                let threads = std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+                    .clamp(1, 16);
+                on_event(Event::Phase {
+                    task_id: task.id,
+                    message: format!(
+                        "Rust 7z 快筛：{} 个候选，{} 线程",
+                        candidates.len(),
+                        threads
+                    ),
+                });
+                match fastprobe::probe_candidates(archive, candidates, threads) {
+                    fastprobe::Batch::Found(pwd) => {
+                        on_event(Event::Phase {
+                            task_id: task.id,
+                            message: "Rust 快筛命中，开始整包解压".into(),
+                        });
+                        return extract_pwd(&pwd);
+                    }
+                    fastprobe::Batch::AllWrong(tried) => {
+                        cleanup(out_dir);
+                        return Attempt::NeedsPassword {
+                            last_msg: format!("Rust 快筛试了 {tried} 个候选密码，均不正确"),
+                        };
+                    }
+                    fastprobe::Batch::Unsupported(msg) => {
+                        on_event(Event::Phase {
+                            task_id: task.id,
+                            message: format!("Rust 快筛不支持（{msg}），回退 7z"),
+                        });
+                    }
+                    fastprobe::Batch::Failed(msg) => {
+                        on_event(Event::Phase {
+                            task_id: task.id,
+                            message: format!("Rust 快筛失败（{msg}），回退 7z"),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 非 ZIP 的加密包：先用 `7z t` 只测第一个条目，并行排除错误密码。
+        // 7zAES 的 KDF 很贵，串行整包解一次 0.2~0.3s；`t` 单条目约 0.07~0.1s，
+        // 多进程并行后候选密码的吞吐能翻几倍。
+        let test_entry = task
+            .info
+            .as_ref()
+            .filter(|i| i.flag_encrypted && !i.needs_password_for_listing)
+            .and_then(|i| {
+                i.entries
+                    .iter()
+                    .find(|e| e.encrypted && !e.is_dir && e.size > 0)
+                    .map(|e| e.path.clone())
+            });
 
         if filter.is_none() && aes_entries.is_none() {
             if let Some(entry) = test_entry.as_deref() {

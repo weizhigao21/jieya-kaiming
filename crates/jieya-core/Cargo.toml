@@ -18,6 +18,8 @@ sha1 = "0.10"
 pbkdf2 = "0.12"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 crc32fast = "1"
+# 7z 密码快筛：只读第一个加密条目，正式解压仍交给 7z
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["aes256"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # 密码库加密导出（P3.5）：容器格式与 Python 版一致

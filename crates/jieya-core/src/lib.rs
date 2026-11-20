@@ -17,6 +17,7 @@ pub mod config;
 pub mod detect;
 pub mod embedded;
 pub mod error;
+pub mod fastprobe;
 pub mod fmt;
 pub mod models;
 pub mod name_repair;
